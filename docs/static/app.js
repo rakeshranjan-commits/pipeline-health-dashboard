@@ -22,17 +22,36 @@ const light = (l, t = '') => `<span class="light ${l || 'grey'}" title="${esc(t)
 const chip = (txt, cls = '') => `<span class="chip ${cls}">${esc(txt)}</span>`;
 const statusChip = r => ({running: chip('running', 'run'), finished: chip('finished', 'green'), needs_review: chip('needs review', 'amber'),
   crashed: chip('crashed', 'red'), failed: chip('failed', 'red')}[r.status] || chip(r.status));
-async function api(p) {
-  const base = new URL('.', document.baseURI).href;
-  const get = async (f) => { const r = await fetch(base + f + '?t=' + Math.floor(Date.now() / 20000), {cache: 'no-store'}); if (!r.ok) throw new Error(f + ' → ' + r.status); return r.json(); };
-  let m;
-  if (p === '/api/runs') return get('api/runs.json');
-  if ((m = p.match(/^\/api\/run\/([^/?]+)$/))) return get('api/run/' + m[1] + '.json');
-  if (p === '/api/rules') return get('api/rules.json');
-  if (p === '/api/server') return get('api/server.json');
-  if ((m = p.match(/^\/api\/compare\?ids=(.*)$/))) { const ids = m[1].split(',').filter(Boolean); return {runs: await Promise.all(ids.map(i => get('api/card/' + i + '.json')))}; }
-  throw new Error('unknown call ' + p);
+const STATIC = !!document.querySelector('meta[name="static-site"]');   // the published copy reads files, not a server
+function staticPath(p) {
+  const u = new URL(p, location.href), src = u.searchParams.get('src') || 'all'; let m;
+  if (u.pathname === '/api/sources') return 'data/sources.json';
+  if (u.pathname === '/api/overview') return 'data/overview-' + src + '.json';
+  if (u.pathname === '/api/runs') return 'data/runs-' + src + '.json';
+  if ((m = u.pathname.match(/^\/api\/run\/(.+)$/))) return 'data/run/' + m[1] + '.json';
+  if (u.pathname === '/api/rules') return 'data/rules.json';
+  if (u.pathname === '/api/server') return 'data/server.json';
+  return p;
 }
+async function api(p) {
+  if (STATIC) {
+    const m = p.match(/^\/api\/compare\?ids=(.*)$/);
+    if (m) return {runs: await Promise.all(m[1].split(',').filter(Boolean).map(i => api('data/card/' + i + '.json')))};
+    if (p.startsWith('/api/')) p = staticPath(p);
+    p += (p.includes('?') ? '&' : '?') + 't=' + Math.floor(Date.now() / 20000);
+  }
+  const r = await fetch(p, {cache: 'no-store'}); if (!r.ok) throw new Error(p + ' → ' + r.status); return r.json();
+}
+const money = v => v == null ? '–' : v >= 100 ? '$' + Math.round(v).toLocaleString() : v >= 1 ? '$' + v.toFixed(2) : v >= 0.01 ? '$' + v.toFixed(3) : v > 0 ? '$' + v.toFixed(4) : '$0';
+const pct = v => v == null ? '–' : (Math.round(v * 10) / 10) + '%';
+/* horizontal bars made of divs: rows [{label, value, text, color, tip}] */
+function hbars(rows, o = {}) {
+  if (!rows.length) return '<p class="muted small">nothing recorded yet</p>';
+  const mx = Math.max(...rows.map(r => r.value), 1e-9);
+  return `<div class="hbs">${rows.map(r => `<div class="hb" data-tip="${esc(r.tip || '')}"><span class="hl" title="${esc(r.label)}">${esc(r.label)}</span><div class="hbar"><i style="width:${Math.max(1, r.value / mx * 100)}%;background:${r.color || 'var(--accent)'}"></i></div><span class="hv">${r.text ?? n1(r.value)}</span></div>`).join('')}</div>`;
+}
+const SRC_NAME = {api: 'API repo', cli: 'CLI repo'};
+const SRC_HELP = {api: 'Runs that call the OpenAI API directly', cli: 'Runs that call the model through the Codex command line'};
 
 // ---------------------------------------------------------------- tooltip
 const tip = $('#tip');
@@ -136,25 +155,60 @@ const tile = (l, v, d = '', c = '') => `<div class="tile ${c}"><div class="v">${
 const lightOf = v => v == null ? 'grey' : v >= 80 ? 'green' : v >= 55 ? 'amber' : 'red';
 
 // ---------------------------------------------------------------- views
-function viewRuns() {
-  const runs = [...state.runs].sort((a, b) => { const k = state.sort.k; const x = a[k], y = b[k]; return ((x ?? -1) > (y ?? -1) ? 1 : -1) * state.sort.d; });
-  const chrono = [...state.runs].filter(r => r.wall_s).sort((a, b) => a.started - b.started).slice(-24);
-  const live = state.runs.filter(r => r.status === 'running');
+function srcCard(x, cur) {
+  const live = x.running ? `<span class="live"></span>${x.running} running` : '';
+  const l = x.health == null ? 'grey' : lightOf(x.health);
+  return `<a class="src ${cur === x.id ? 'on' : ''}" href="#/src/${x.id}"><div class="src-h"><b>${esc(SRC_NAME[x.id] || x.label)}</b><span class="small">${live}</span></div>` +
+    `<div class="muted small">${esc(SRC_HELP[x.id] || '')}</div>` +
+    `<div class="src-k"><div><div class="v">${x.runs}</div><div class="l">runs</div></div><div><div class="v">${x.pass_rate == null ? '–' : Math.round(x.pass_rate) + '%'}</div><div class="l">passed</div></div>` +
+    `<div><div class="v">${light(l)}${x.health ?? '–'}</div><div class="l">health</div></div><div><div class="v">${money(x.cost)}</div><div class="l">model cost</div></div></div>` +
+    `<div class="muted small">last run ${x.last_started ? when(x.last_started) : 'none yet'}</div></a>`;
+}
+function viewHome(ov, runs, src) {
+  const T = ov.totals, srcs = ['api', 'cli'].map(k => ov.sources[k] || {id: k, label: SRC_NAME[k], runs: 0, running: 0, pass_rate: null, health: null, cost: 0, last_started: null});
+  const trend = ov.runs.filter(r => r.status !== 'running').slice(-30);
+  const bar = (f, fmt, col) => trend.map(r => ({label: r.pr, value: f(r) ?? 0, color: col ? col(r) : COL[r.light], tip: `${r.id}<br>${fmt(f(r))} · health ${r.score ?? '–'}`}));
+  const ag = ov.agents.filter(a => a.seconds > 0).slice(0, 12);
+  const live = runs.filter(r => r.status === 'running');
   const th = (k, t, n) => `<th class="s ${n ? 'num' : ''}" data-sort="${k}">${t}${state.sort.k === k ? (state.sort.d > 0 ? ' ▲' : ' ▼') : ''}</th>`;
-  return `<h1>Runs</h1><p class="muted">Every run is recorded as it happens and kept. Click a row for the full picture; tick two or more to compare.</p>` +
-    (live.length ? `<div class="card" style="margin-bottom:14px"><span class="live"></span><b>${live.length} run${live.length > 1 ? 's' : ''} in progress</b> — ${live.map(r => `<a href="#/run/${r.id}">${esc(r.id)}</a>`).join(', ')}</div>` : '') +
-    (chrono.length > 1 ? `<div class="row"><div class="card grow"><h3>Total time per run</h3>${barChart(chrono.map(r => ({label: r.pr, value: r.wall_s, color: COL[r.light], tip: `${r.id}<br>${dur(r.wall_s)} · health ${r.score ?? '–'}`})), {yfmt: dur})}</div>` +
-      `<div class="card grow"><h3>Mean LLM call time per run (s)</h3>${barChart(chrono.filter(r => r.llm_calls).map(r => ({label: r.pr, value: r.llm_mean_s, color: 'var(--accent)', tip: `${r.id}<br>${r.llm_mean_s}s mean over ${r.llm_calls} calls`})), {})}</div></div>` : '') +
-    `<div class="card wrap" style="margin-top:14px;padding:0"><table><thead><tr><th></th>${th('id', 'Run')}${th('status', 'Status')}${th('score', 'Health', 1)}${th('wall_s', 'Time', 1)}${th('agents', 'Agents', 1)}${th('llm_calls', 'LLM calls', 1)}${th('llm_mean_s', 'Mean call', 1)}${th('tokens_in', 'Tokens in / out', 1)}${th('cache_pct', 'Cached', 1)}${th('peak_mem', 'Peak mem', 1)}<th>Biggest finding</th></tr></thead><tbody>` +
-    (runs.length ? runs.map(r => `<tr class="click" data-open="${esc(r.id)}"><td><input type="checkbox" data-sel="${esc(r.id)}" ${state.sel.has(r.id) ? 'checked' : ''}></td><td><b>${esc(r.id)}</b><br><span class="muted small">${when(r.started)}${r.commits ? ' · ' + n0(r.commits) + ' commits' : ''}</span></td>` +
-      `<td>${statusChip(r)}${r.legacy ? ' ' + chip('imported') : ''}${r.fake_llm ? ' ' + chip('fake llm') : ''}</td><td class="num">${light(r.light)}${r.score ?? '–'}</td><td class="num">${dur(r.wall_s)}</td>` +
-      `<td class="num">${r.agents || '–'}${r.failed_agents ? ` <span style="color:var(--red)">(${r.failed_agents} failed)</span>` : ''}</td><td class="num">${n0(r.llm_calls)}</td><td class="num">${r.llm_calls ? r.llm_mean_s + 's' : '–'}</td><td class="num">${tok(r.tokens_in)} / ${tok(r.tokens_out)}</td><td class="num">${r.llm_calls ? r.cache_pct + '%' : '–'}</td><td class="num">${r.peak_mem != null ? n1(r.peak_mem) + ' GiB' : '–'}</td><td class="small">${esc(r.top || '')}</td></tr>`).join('')
-      : '<tr><td colspan="12" class="muted">No runs yet. Start one (docker_narrative.py) and it appears here live.</td></tr>') + `</tbody></table></div>` +
+  const sorted = [...runs].sort((a, b) => { const k = state.sort.k, x = a[k], y = b[k]; return ((x ?? -1) > (y ?? -1) ? 1 : -1) * state.sort.d; });
+  return `<h1>Overall health <span class="muted" style="font-size:15px;font-weight:500">· ${src ? esc(SRC_NAME[src] || src) : 'all runs'}</span></h1>` +
+    `<p class="muted">Every run is added here as it happens, so these totals keep growing. Green = healthy, amber = look at it, red = needs attention.</p>` +
+    `<div class="srcs">${srcs.map(x => srcCard(x, src)).join('')}</div>` +
+    (live.length ? `<div class="card" style="margin:14px 0"><span class="live"></span><b>${live.length} run${live.length > 1 ? 's' : ''} in progress</b> — ${live.map(r => `<a href="#/run/${r.id}">${esc(r.id)}</a>`).join(', ')}</div>` : '') +
+    `<h2>Totals so far</h2><div class="tiles">` +
+    tile('runs', T.runs, `${T.passed} passed · ${T.needs_review} need review · ${T.crashed} failed`) +
+    tile('success rate', T.pass_rate == null ? '–' : Math.round(T.pass_rate) + '%', 'runs that passed the final check', T.pass_rate == null ? '' : T.pass_rate >= 80 ? 'green' : T.pass_rate >= 50 ? 'amber' : 'red') +
+    tile('average health', T.health ?? '–', 'score out of 100', T.health == null ? '' : lightOf(T.health)) +
+    tile('time spent', dur(T.wall_s), `${dur(T.mean_wall_s)} per run`) +
+    tile('model calls', n0(T.calls), `${n0(T.failed_calls)} failed`, T.calls && T.failed_calls / T.calls > .1 ? 'red' : T.calls && T.failed_calls / T.calls > .03 ? 'amber' : '') +
+    tile('model cost', money(T.cost), `${money(T.cost_per_run)} per run · ${esc(ov.prices ? 'gpt-6-luna prices' : '')}`) +
+    tile('saved by the cache', money(T.cache_saved), `${pct(T.cache_pct)} of input was reused`) +
+    tile('words read / written', `${tok(T.tokens_in)} / ${tok(T.tokens_out)}`, 'tokens in / out') + `</div>` +
+    `<h2>Run by run</h2><div class="row">` +
+    `<div class="card grow"><h3>Health of each run</h3>${barChart(bar(r => r.score, v => 'health ' + (v ?? '–')), {ymax: 100})}</div>` +
+    `<div class="card grow"><h3>Model cost of each run</h3>${barChart(bar(r => r.cost, money, r => 'var(--accent)'), {yfmt: money})}</div></div>` +
+    `<div class="row" style="margin-top:14px"><div class="card grow"><h3>Time each run took</h3>${barChart(bar(r => r.wall_s, dur), {yfmt: dur})}</div>` +
+    `<div class="card grow"><h3>Failed model calls in each run</h3>${barChart(bar(r => r.failed_calls, n0, r => r.failed_calls ? 'var(--red)' : 'var(--green)'), {yfmt: n0})}</div></div>` +
+    `<h2>Where the model time and money go <span class="muted small">— all runs added up, per agent</span></h2><div class="row">` +
+    `<div class="card grow"><h3>Cost per agent</h3>${hbars(ov.model.map((a, i) => ({label: a.label, value: a.cost, text: money(a.cost), color: PALETTE[i % PALETTE.length], tip: `${a.label}<br>${n0(a.calls)} calls · ${money(a.cost)}<br>without cache it would be ${money(a.cost_if_no_cache)}`})))}</div>` +
+    `<div class="card grow"><h3>Model calls per agent</h3>${hbars(ov.model.map((a, i) => ({label: a.label, value: a.calls, text: n0(a.calls), color: PALETTE[i % PALETTE.length], tip: `${n0(a.failed)} failed · ${a.mean_s}s per call`})))}</div>` +
+    `<div class="card grow"><h3>Input reused from the cache</h3>${hbars(ov.model.map(a => ({label: a.label, value: a.cache_pct, text: pct(a.cache_pct), color: a.cache_pct >= 50 ? 'var(--green)' : a.cache_pct >= 20 ? 'var(--amber)' : 'var(--red)', tip: `${tok(a.tokens_cached)} of ${tok(a.tokens_in)} input tokens`})))}</div></div>` +
+    `<div class="row" style="margin-top:14px"><div class="card grow"><h3>Work shared between workers <span class="muted small" style="text-transform:none">(a worker is one parallel slot)</span></h3>${hbars(ov.workers.map(w => ({label: 'worker ' + w.worker, value: w.calls, text: n0(w.calls) + ' calls', tip: `${dur(w.busy_s)} busy · ${money(w.cost)} · ${n0(w.failed)} failed`})))}</div>` +
+    `<div class="card grow"><h3>Average time each agent takes</h3>${hbars(ag.map((a, i) => ({label: a.name, value: a.mean_s, text: dur(a.mean_s), color: a.failed ? 'var(--red)' : undefined, tip: `${a.name}: ${dur(a.mean_s)} on average over ${a.runs} runs · longest ${dur(a.max_s)} · failed ${a.failed}×`})))}</div></div>` +
+    (ov.problems.length ? `<h2>What keeps going wrong</h2><div class="card">${ov.problems.map(p => `<div class="prow"><span>${esc(p.title)}</span><span class="chip amber">${p.runs} run${p.runs > 1 ? 's' : ''}</span></div>`).join('')}</div>` : '') +
+    `<h2>All runs</h2><p class="muted small">Click a run for the full picture; tick two or more to compare.</p>` +
+    `<div class="card wrap" style="padding:0"><table><thead><tr><th></th>${th('id', 'Run')}${th('source', 'Where')}${th('status', 'Result')}${th('score', 'Health', 1)}${th('wall_s', 'Time', 1)}${th('llm_calls', 'Model calls', 1)}${th('cost', 'Cost', 1)}${th('cache_pct', 'Cached', 1)}<th>Biggest finding</th></tr></thead><tbody>` +
+    (sorted.length ? sorted.map(r => `<tr class="click" data-open="${esc(r.id)}"><td><input type="checkbox" data-sel="${esc(r.id)}" ${state.sel.has(r.id) ? 'checked' : ''}></td><td><b>${esc(r.id)}</b><br><span class="muted small">${when(r.started)}${r.commits ? ' · ' + n0(r.commits) + ' commits' : ''}</span></td>` +
+      `<td>${chip(SRC_NAME[r.source] || r.source || '')}${r.fake_llm ? ' ' + chip('test model') : ''}</td><td>${statusChip(r)}</td><td class="num">${light(r.light)}${r.score ?? '–'}</td><td class="num">${dur(r.wall_s)}</td>` +
+      `<td class="num">${n0(r.llm_calls)}${r.llm_failed ? ` <span style="color:var(--red)">(${r.llm_failed} failed)</span>` : ''}</td><td class="num">${money(r.cost)}</td><td class="num">${r.llm_calls ? pct(r.cache_pct) : '–'}</td><td class="small">${esc(r.top || '')}</td></tr>`).join('')
+      : '<tr><td colspan="10" class="muted">No runs yet. Start one and it appears here live.</td></tr>') + `</tbody></table></div>` +
     `<p><button id="cmp" ${state.sel.size < 2 ? 'disabled' : ''}>Compare ${state.sel.size} selected</button></p>`;
 }
-function tabs(id, cur) { return `<div class="tabs">${['overview', 'agents', 'llm', 'system', 'bottlenecks'].map(t => `<a href="#/run/${id}/${t}" class="${t === cur ? 'on' : ''}">${t[0].toUpperCase() + t.slice(1)}</a>`).join('')}</div>`; }
+const TAB_NAME = {overview: 'Summary', agents: 'Agents', llm: 'Model calls', system: 'Machine', bottlenecks: 'Findings'};
+function tabs(id, cur) { return `<div class="tabs">${Object.keys(TAB_NAME).map(t => `<a href="#/run/${id}/${t}" class="${t === cur ? 'on' : ''}">${TAB_NAME[t]}</a>`).join('')}</div>`; }
 function head(r) {
-  return `<p class="small"><a href="#/">← all runs</a></p><h1>${esc(r.id)} ${statusChip(r)} ${r.legacy ? chip('imported from an older run') : ''}${r.meta.fake_llm ? ' ' + chip('fake llm') : ''}</h1>` +
+  return `<p class="small"><a href="#/">← back to overall health</a></p><h1>${esc(r.id)} ${statusChip(r)} ${r.legacy ? chip('imported from an older run') : ''}${r.source ? ' ' + chip(SRC_NAME[r.source] || r.source) : ''}${r.meta.fake_llm ? ' ' + chip('test model') : ''}</h1>` +
     `<p class="muted">${when(r.started)} · ${dur(r.wall_s)}${r.status === 'running' ? ' so far' : ''} · model ${esc(r.meta.model || '?')} / ${esc(r.meta.effort || '?')}${r.meta.commits ? ' · ' + n0(r.meta.commits) + ' commits' : ''}${r.meta.tier ? ' · ' + r.meta.tier + ' tier' : ''}${r.result ? ' · ' + esc(r.result) : ''}</p>`;
 }
 function tabOverview(r) {
@@ -183,19 +237,34 @@ function tabAgents(r) {
     rows.map(a => `<tr><td><b>${esc(a.name)}</b><br><span class="muted small">${esc(a.role)}</span></td><td>${esc(a.group)}</td><td class="num">${a.start != null ? dur(a.start) : '–'}</td><td class="num">${dur(a.seconds)}</td><td class="num">${(a.share * 100).toFixed(1)}%</td><td class="num">${a.solo_s ? dur(a.solo_s) : '–'}</td><td class="num">${a.queue_wait > 1 ? dur(a.queue_wait) : '–'}</td><td class="num">${a.attempts}</td><td class="num">${a.fixes}</td><td>${chip(a.status, a.status === 'SUCCESS' || a.status === 'RESUMED' ? 'green' : a.status === 'FAILED' ? 'red' : '')}</td><td>${light(a.light)}<span class="small muted">${esc(a.why.join('; '))}</span></td></tr>`).join('') + `</tbody></table></div>`;
 }
 function tabLLM(r) {
-  const L = r.llm; if (!L.calls && !L.cache_hits) return '<p class="note">No LLM calls were recorded for this run' + (r.meta.fake_llm ? ' (it used the fake LLM).' : '.') + '</p>';
+  const L = r.llm; if (!L.calls && !L.cache_hits) return '<p class="note">No model calls were recorded for this run' + (r.meta.fake_llm ? ' (it used the test model).' : '.') + '</p>';
   const c = (v, a, b) => v > b ? 'red' : v > a ? 'amber' : '';
-  return `<div class="tiles">` + tile('LLM calls', n0(L.calls), `${L.cache_hits} served from the response cache`) + tile('mean call time', L.mean_s + 's', `median ${L.p50_s}s`) +
-    tile('p95 call time', L.p95_s + 's', `max ${L.max_s}s`, L.p50_s && L.p95_s / L.p50_s > 4 ? 'amber' : '') + tile('failed attempts', n0(L.failed), (L.fail_rate * 100).toFixed(1) + '% of calls', c(L.fail_rate, .03, .1)) +
-    tile('input tokens', tok(L.tokens_in), `${n0(L.in_per_call)} per call`) + tile('cached share', L.cache_pct + '%', `${tok(L.tokens_cached)} tokens`, L.tokens_in && !r.meta.fake_llm && L.cache_pct < 30 ? 'amber' : '') +
-    tile('output tokens', tok(L.tokens_out)) + tile('tokens per item', n0(L.tokens_per_item), `${n0(L.fresh_per_item)} not cached`) +
-    tile('items per minute', n1(L.items_per_min), `${n0(L.items)} items`) + tile('worker utilisation', Math.round(L.utilisation * 100) + '%', `mean ${L.mean_workers} workers`) +
-    tile('at the worker limit', Math.round(L.saturated_share * 100) + '% of busy time', 'high = add workers', L.saturated_share > .6 ? 'amber' : '') + `</div>` +
-    `<div class="row"><div class="card grow"><h3>Call time over the run</h3>${scatter(L.points, r.wall_s)}</div><div class="card grow"><h3>Call time distribution</h3>${barChart(L.hist.map(b => ({label: b[0] + 's', value: b[1], tip: `${b[0]}s+: ${b[1]} calls`})), {h: 220})}</div></div>` +
-    `<div class="row"><div class="card grow"><h3>Throughput (items per minute)</h3>${barChart(L.per_min.map(b => ({label: b.min + 'm', value: b.items, tip: `minute ${b.min}: ${b.items} items in ${b.calls} calls (mean ${b.mean_s}s)`})), {h: 190})}</div>` +
-    `<div class="card grow"><h3>Calls in flight vs worker limit</h3>${lineChart({series: [{name: 'calls in flight', color: '#5b9cf5', pts: L.inflight, step: true, area: true}, {name: 'worker limit', color: '#d9a21b', pts: r.workers, step: true}], h: 190, yfmt: n0})}</div></div>` +
-    `<h2>By stage</h2><div class="card wrap" style="padding:0"><table><thead><tr><th>Stage</th><th class="num">Calls</th><th class="num">Failed</th><th class="num">Items/call</th><th class="num">Mean</th><th class="num">p95</th><th class="num">Busy time</th><th class="num">Items/min</th><th class="num">Tokens in</th><th class="num">Cached</th><th class="num">Tokens/item</th></tr></thead><tbody>` +
-    L.stages.map(s => `<tr><td><i class="light" style="background:${stageColor(s.stage)}"></i><b>${esc(s.stage)}</b></td><td class="num">${n0(s.calls)}</td><td class="num">${s.failed || '–'}</td><td class="num">${s.items_per_call}</td><td class="num">${s.mean_s}s</td><td class="num">${s.p95_s}s</td><td class="num">${dur(s.busy_s)}</td><td class="num">${s.items_per_min}</td><td class="num">${tok(s.tokens_in)}</td><td class="num">${s.cache_pct}%</td><td class="num">${n0(s.tokens_per_item)}</td></tr>`).join('') + `</tbody></table></div>`;
+  const A = L.api || {}, haveW = (L.by_worker || []).length > 0, P = L.prices || {};
+  const agentRows = (L.by_agent || []), workerRows = (L.by_worker || []);
+  return `<h2 style="margin-top:6px">This run in numbers</h2><div class="tiles">` +
+    tile('model calls', n0(L.calls), `${n0(L.cache_hits)} answered from saved answers (free)`) + tile('cost of this run', money(L.cost), `${money(L.cost_per_call)} per call · gpt-6-luna prices`) +
+    tile('saved by the cache', money(L.cache_saved), `without it: ${money(L.cost_if_no_cache)}`) + tile('input reused from cache', pct(L.cache_pct), `${tok(L.tokens_cached)} of ${tok(L.tokens_in)} read`, L.tokens_in && !r.meta.fake_llm && L.cache_pct < 30 ? 'amber' : '') +
+    tile('words read (input)', tok(L.tokens_in), `${n0(L.in_per_call)} per call`) + tile('words written (output)', tok(L.tokens_out), 'includes the model thinking') +
+    tile('average call time', L.mean_s + 's', `typical ${L.p50_s}s · slowest 5%: ${L.p95_s}s`, L.p50_s && L.p95_s / L.p50_s > 4 ? 'amber' : '') + tile('failed calls', n0(L.failed), pct(L.fail_rate * 100) + ' of calls', c(L.fail_rate, .03, .1)) +
+    (A.requests ? tile('rate-limited by the API (429)', n0(A.rate_limited), A.rate_limited ? 'too many at once: lower the workers' : 'none', A.rate_limited ? (A.rate_limited > 5 ? 'red' : 'amber') : '') +
+      tile('API errors / timeouts', `${n0(A.server_errors)} / ${n0(A.timeouts + A.network)}`, `key problems: ${n0(A.auth_errors)} · rejected: ${n0(A.other_4xx)}`, (A.server_errors + A.timeouts + A.network + A.auth_errors) ? 'amber' : '') : '') + `</div>` +
+    `<div class="row" style="margin-top:14px"><div class="card grow"><h3>Cost as the run goes on</h3>${lineChart({series: [{name: 'cost so far', color: '#2f8f6b', pts: L.cost_series || [], area: true}], h: 190, yfmt: money})}</div>` +
+    `<div class="card grow"><h3>Model calls running at the same time</h3>${lineChart({series: [{name: 'calls running', color: '#5b9cf5', pts: L.inflight, step: true, area: true}, {name: 'allowed at once', color: '#d9a21b', pts: r.workers, step: true}], h: 190, yfmt: n0})}</div></div>` +
+    `<h2>By agent <span class="muted small">— which agent uses the model, and what it costs</span></h2>` +
+    `<div class="card wrap" style="padding:0"><table><thead><tr><th>Agent</th><th class="num">Calls</th><th class="num">Failed</th><th class="num">Time spent</th><th class="num">Per call</th><th class="num">Words read</th><th class="num">Reused from cache</th><th class="num">Words written</th><th class="num">Cost</th><th class="num">Without cache</th><th class="num">Workers used</th></tr></thead><tbody>` +
+    (agentRows.map(a => `<tr><td><b>${esc(a.label)}</b></td><td class="num">${n0(a.calls)}</td><td class="num" style="color:${a.failed ? 'var(--red)' : 'inherit'}">${n0(a.failed)}</td><td class="num">${dur(a.busy_s)}</td><td class="num">${a.mean_s}s</td><td class="num">${tok(a.tokens_in)}</td><td class="num">${pct(a.cache_pct)}</td><td class="num">${tok(a.tokens_out)}</td><td class="num"><b>${money(a.cost)}</b></td><td class="num muted">${money(a.cost_if_no_cache)}</td><td class="num">${haveW ? a.workers : '–'}</td></tr>`).join('') || '<tr><td colspan="11" class="muted">none</td></tr>') + `</tbody></table></div>` +
+    `<div class="row" style="margin-top:14px"><div class="card grow"><h3>Cost per agent</h3>${hbars(agentRows.map((a, i) => ({label: a.label, value: a.cost, text: money(a.cost), color: PALETTE[i % PALETTE.length], tip: `${a.label}: ${n0(a.calls)} calls`})))}</div>` +
+    `<div class="card grow"><h3>Time spent calling the model, per agent</h3>${hbars(agentRows.map((a, i) => ({label: a.label, value: a.busy_s, text: dur(a.busy_s), color: PALETTE[i % PALETTE.length], tip: `${a.mean_s}s per call`})))}</div>` +
+    `<div class="card grow"><h3>Input reused from the cache, per agent</h3>${hbars(agentRows.map(a => ({label: a.label, value: a.cache_pct, text: pct(a.cache_pct), color: a.cache_pct >= 50 ? 'var(--green)' : a.cache_pct >= 20 ? 'var(--amber)' : 'var(--red)', tip: `${tok(a.tokens_cached)} of ${tok(a.tokens_in)}`})))}</div></div>` +
+    `<h2>By worker <span class="muted small">— a worker is one parallel slot that makes calls; the number only tells slots apart</span></h2>` +
+    (haveW ? `<div class="card wrap" style="padding:0"><table><thead><tr><th>Worker</th><th class="num">Calls</th><th class="num">Failed</th><th class="num">Busy for</th><th class="num">Share of all call time</th><th class="num">Per call</th><th class="num">Reused from cache</th><th class="num">Cost</th><th>Worked on</th></tr></thead><tbody>` +
+      workerRows.map(w => `<tr><td><b>worker ${w.worker}</b></td><td class="num">${n0(w.calls)}</td><td class="num" style="color:${w.failed ? 'var(--red)' : 'inherit'}">${n0(w.failed)}</td><td class="num">${dur(w.busy_s)}</td><td class="num">${Math.round(w.share * 100)}%</td><td class="num">${w.mean_s}s</td><td class="num">${pct(w.cache_pct)}</td><td class="num">${money(w.cost)}</td><td class="small">${esc(w.agents.join(', '))}</td></tr>`).join('') + `</tbody></table></div>` +
+      `<div class="row" style="margin-top:14px"><div class="card grow"><h3>Calls per worker</h3>${hbars(workerRows.map(w => ({label: 'worker ' + w.worker, value: w.calls, text: n0(w.calls), tip: `${dur(w.busy_s)} busy`})))}</div>` +
+      `<div class="card grow"><h3>Busy time per worker</h3>${hbars(workerRows.map(w => ({label: 'worker ' + w.worker, value: w.busy_s, text: dur(w.busy_s), tip: `${Math.round(w.share * 100)}% of all call time`})))}</div></div>`
+      : '<p class="note">Worker numbers were not recorded for this run (it was made before this view existed).</p>') +
+    `<h2>How long calls take</h2><div class="row"><div class="card grow"><h3>Each call, over the run</h3>${scatter(L.points, r.wall_s)}</div><div class="card grow"><h3>How long calls take (count by seconds)</h3>${barChart(L.hist.map(b => ({label: b[0] + 's', value: b[1], tip: `${b[0]}s+: ${b[1]} calls`})), {h: 190})}</div></div>` +
+    `<h2>Speed</h2><div class="row"><div class="card grow"><h3>Texts processed per minute</h3>${barChart(L.per_min.map(b => ({label: b.min + 'm', value: b.items, tip: `minute ${b.min}: ${b.items} texts in ${b.calls} calls (mean ${b.mean_s}s)`})), {h: 190})}</div></div>` +
+    `<p class="small muted">${esc((P.input != null ? `Prices used (per million words): input $${P.input}, cached input $${P.cached_input}, output $${P.output}. ` : ''))}Change them in <span class="mono">dashboard/pricing.json</span>; costs are estimates from the token counts.</p>`;
 }
 function tabSystem(r) {
   const S = r.system, pool = r.meta.pool_gib; if (!S.series.length) return '<p class="note">No system samples were recorded for this run' + (r.legacy ? ' (an imported run only has LLM data).' : '.') + '</p>';
@@ -239,13 +308,17 @@ async function viewRules() {
 async function render(force) {
   uid = 0; wires.length = 0;          // deterministic chart ids: an unchanged page builds identical HTML and is not redrawn
   const h = location.hash.replace(/^#\/?/, '').split('/'), app = $('#app');
-  document.querySelectorAll('nav a').forEach(a => a.classList.toggle('on', (h[0] === '' && a.id === 'nav-runs') || a.id === 'nav-' + h[0]));
+  document.querySelectorAll('nav a').forEach(a => a.classList.toggle('on', ((h[0] === '' || h[0] === 'src') && a.id === 'nav-runs') || a.id === 'nav-' + h[0]));
   try {
     let html;
     if (h[0] === 'run' && h[1]) html = await viewRun(h[1], h[2] || 'overview');
     else if (h[0] === 'compare') html = await viewCompare((h[1] || '').split(',').filter(Boolean));
     else if (h[0] === 'rules') html = await viewRules();
-    else { state.runs = (await api('/api/runs')).runs; html = viewRuns(); }
+    else {
+      const src = h[0] === 'src' ? h[1] : '', q = src ? '?src=' + src : '';
+      const [ov, rr] = await Promise.all([api('/api/overview' + q), api('/api/runs' + q)]);
+      state.runs = rr.runs; html = viewHome(ov, rr.runs, src);
+    }
     if (!force && html === state.last) return;
     const y = scrollY; state.last = html; app.innerHTML = html; scrollTo(0, y); wires.forEach(f => f());
     app.querySelectorAll('[data-open]').forEach(tr => tr.addEventListener('click', e => { if (e.target.tagName !== 'INPUT') location.hash = '#/run/' + tr.dataset.open; }));
