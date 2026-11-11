@@ -200,35 +200,37 @@ function viewHome(ov, runs, src) {
     `<h2>All runs</h2><p class="muted small">Click a run for the full picture; tick two or more to compare.</p>` +
     `<div class="card wrap" style="padding:0"><table><thead><tr><th></th>${th('id', 'Run')}${th('source', 'Where')}${th('status', 'Result')}${th('score', 'Health', 1)}${th('wall_s', 'Time', 1)}${th('llm_calls', 'Model calls', 1)}${th('cost', 'Cost', 1)}${th('cache_pct', 'Cached', 1)}<th>Biggest finding</th></tr></thead><tbody>` +
     (sorted.length ? sorted.map(r => `<tr class="click" data-open="${esc(r.id)}"><td><input type="checkbox" data-sel="${esc(r.id)}" ${state.sel.has(r.id) ? 'checked' : ''}></td><td><b>${esc(r.id)}</b><br><span class="muted small">${when(r.started)}${r.commits ? ' · ' + n0(r.commits) + ' commits' : ''}</span></td>` +
-      `<td>${chip(SRC_NAME[r.source] || r.source || '')}${r.fake_llm ? ' ' + chip('test model') : ''}</td><td>${statusChip(r)}</td><td class="num">${light(r.light)}${r.score ?? '–'}</td><td class="num">${dur(r.wall_s)}</td>` +
+      `<td>${chip(SRC_NAME[r.source] || r.source || '')}${r.fake_llm ? ' ' + chip('test model') : ''}${r.mercor ? ' ' + chip(r.mercor === 'finished' ? 'graded' : 'grading', r.mercor === 'finished' ? 'green' : 'run') : ''}</td><td>${statusChip(r)}</td><td class="num">${light(r.light)}${r.score ?? '–'}</td><td class="num">${dur(r.wall_s)}</td>` +
       `<td class="num">${n0(r.llm_calls)}${r.llm_failed ? ` <span style="color:var(--red)">(${r.llm_failed} failed)</span>` : ''}</td><td class="num">${money(r.cost)}</td><td class="num">${r.llm_calls ? pct(r.cache_pct) : '–'}</td><td class="small">${esc(r.top || '')}</td></tr>`).join('')
       : '<tr><td colspan="10" class="muted">No runs yet. Start one and it appears here live.</td></tr>') + `</tbody></table></div>` +
     `<p><button id="cmp" ${state.sel.size < 2 ? 'disabled' : ''}>Compare ${state.sel.size} selected</button></p>`;
 }
-const TAB_NAME = {overview: 'Summary', agents: 'Agents', llm: 'Model calls', system: 'Machine', bottlenecks: 'Findings'};
+const TAB_NAME = {overview: 'Summary', mercor: 'Mercor grader', agents: 'Agents', llm: 'Model calls', system: 'Machine', bottlenecks: 'Findings'};
 function tabs(id, cur) { return `<div class="tabs">${Object.keys(TAB_NAME).map(t => `<a href="#/run/${id}/${t}" class="${t === cur ? 'on' : ''}">${TAB_NAME[t]}</a>`).join('')}</div>`; }
+document.addEventListener('click', e => { const b = e.target.closest && e.target.closest('[data-dl]'); if (b && state.run) mgDownload(state.run, b.dataset.dl); });
 function head(r) {
-  return `<p class="small"><a href="#/">← back to overall health</a></p><h1>${esc(r.id)} ${statusChip(r)} ${r.legacy ? chip('imported from an older run') : ''}${r.source ? ' ' + chip(SRC_NAME[r.source] || r.source) : ''}${r.meta.fake_llm ? ' ' + chip('test model') : ''}</h1>` +
+  return `<p class="small"><a href="#/">← back to overall health</a></p><h1>${esc(r.id)} ${statusChip(r)} ${r.legacy ? chip('imported from an older run') : ''}${r.source ? ' ' + chip(SRC_NAME[r.source] || r.source) : ''}${r.meta.fake_llm ? ' ' + chip('test model') : ''}${r.mercor ? ' ' + chip(r.mercor.status === 'finished' ? 'graded' : 'grading', r.mercor.status === 'finished' ? 'green' : 'run') : ''}</h1>` +
     `<p class="muted">${when(r.started)} · ${dur(r.wall_s)}${r.status === 'running' ? ' so far' : ''} · model ${esc(r.meta.model || '?')} / ${esc(r.meta.effort || '?')}${(r.repo_stats?.before?.commits ?? r.meta.commits) ? ' · ' + n0(r.repo_stats?.before?.commits ?? r.meta.commits) + ' commits' : ''}${r.meta.tier ? ' · ' + r.meta.tier + ' tier' : ''}${r.result ? ' · ' + esc(r.result) : ''}</p>`;
 }
 function repoPanel(r) {
-  const S = r.repo_stats, B = S && S.before, A = S && S.after;
+  const S = r.repo_stats, B = S && S.before, A = S && S.after, G = r.mercor && r.mercor.after;
   const title = '<h2 style="margin-top:6px">Repository before and after</h2>';
   if (!B) return title + '<p class="note">Repository counts were not recorded for this run.</p>';
   const rows = [['commits', 'Commits', 'whole history, all branches'], ['loc', 'Lines of code', 'text lines in the files of the latest commit'],
     ['contributors', 'Contributors', 'different authors in the history'], ['prs', 'Pull requests', 'merged pull requests'], ['issues', 'Issues', 'issues']];
   const num = v => v == null ? '–' : n0(v);
+  const gv = k => { const v = k === 'loc' ? G.loc_code : G[k]; return v == null ? '<span class="muted">–</span>' : n0(v) + (k === 'loc' ? ' <span class="muted small">code lines</span>' : ''); };
   const diff = (b, a) => {
     if (b == null || a == null) return '<span class="muted">–</span>';
     const d = a - b; if (!d) return '<span class="muted">no change</span>';
     return (d > 0 ? '+' : '−') + n0(Math.abs(d)) + (b ? ` <span class="muted small">(${d > 0 ? '+' : '−'}${Math.abs(d / b * 100).toFixed(1)}%)</span>` : '');
   };
   return title + `<div class="card wrap" style="padding:0"><table><thead><tr><th></th><th class="num">Original repository <span class="muted small">(before)</span></th>` +
-    `<th class="num">Anonymised repository <span class="muted small">(after)</span></th><th class="num">Difference</th></tr></thead><tbody>` +
+    `<th class="num">Anonymised repository <span class="muted small">(after)</span></th><th class="num">Difference</th>${G ? '<th class="num">Measured by the grader <span class="muted small">(after)</span></th>' : ''}</tr></thead><tbody>` +
     rows.map(([k, label, hint]) => `<tr><td><b>${label}</b><br><span class="muted small">${hint}</span></td><td class="num">${num(B[k])}</td>` +
-      `<td class="num">${A ? num(A[k]) : '<span class="muted">not recorded</span>'}</td><td class="num">${A ? diff(B[k], A[k]) : '<span class="muted">–</span>'}</td></tr>`).join('') +
+      `<td class="num">${A ? num(A[k]) : '<span class="muted">not recorded</span>'}</td><td class="num">${A ? diff(B[k], A[k]) : '<span class="muted">–</span>'}</td>${G ? `<td class="num">${gv(k)}</td>` : ''}</tr>`).join('') +
     `</tbody></table></div><p class="small muted">Counts only: no names or file contents. “After” is the repository this run delivered, with its anonymised pull requests and issues. ` +
-    `Small differences are expected, because the anonymisation rewrites names, authors and some text.${A ? '' : ' This run has no “after” figures: the delivered repository is overwritten by the next run of the same repository, so only the latest run of each repository keeps them.'}</p>`;
+    `Small differences are expected, because the anonymisation rewrites names, authors and some text.${G ? ' The grader column is what the Mercor analysis tool counted on the delivered repository (lines are code lines only, so they are lower than the text lines above).' : ''}${A ? '' : ' This run has no “after” figures: the delivered repository is overwritten by the next run of the same repository, so only the latest run of each repository keeps them.'}</p>`;
 }
 function tabOverview(r) {
   const s = r.score, k = r.kpis, comp = (n, v, why) => `<div class="comp"><span>${n}</span><div class="bar"><i style="width:${v ?? 0}%;background:${COL[lightOf(v)]}"></i></div><b>${v ?? '–'}</b></div>${why && why.length ? `<div class="small muted" style="margin:-2px 0 6px 98px">${esc(why.join(' · '))}</div>` : ''}`;
@@ -247,6 +249,60 @@ function tabOverview(r) {
     tile('avg CPU', k.avg_cpu != null ? n1(k.avg_cpu) + ' cores' : '–', r.meta.cpus ? `of ${r.meta.cpus}` : '') + `</div>` +
     (cp.length ? `<h2>Critical path <span class="muted small">— the chain that decided the finish time</span></h2><div class="card"><div class="crit">${cp.map((p, i) => `${i ? `<span class="a">→${p.wait > 1 ? ' (' + dur(p.wait) + ' wait) ' : ''}</span>` : ''}<span class="n"><b>${esc(p.name)}</b> ${dur(p.seconds)}</span>`).join('')}</div></div>` : '') +
     `<h2>Timeline</h2><div class="card">${gantt(r.agents, r.wall_s)}</div>`;
+}
+
+// ---------------------------------------------------------------- Mercor grader (repo-quality-score + repo_analysis_tool, run on the delivered repository)
+const MG_GROUPS = [
+  ['The repository', [['repo_name', 'Name'], ['license_type', 'License'], ['is_git', 'Git history found'], ['git_history_intact', 'History looks continuous']]],
+  ['History', [['commits', 'Commits'], ['meaningful_commit_count', 'Meaningful commits'], ['contributors', 'Contributors'], ['branch_count', 'Branches'],
+    ['first_commit_date', 'First commit'], ['last_commit_date', 'Last commit'], ['development_span_months', 'Active span (months)'], ['commits_per_month', 'Commits per month']]],
+  ['Code size', [['loc_code', 'Lines of code'], ['loc_comment', 'Comment lines'], ['loc_blank', 'Blank lines'], ['loc_files', 'Source files'], ['tokens_llm', 'LLM tokens'], ['duplication_weighted_percent', 'Duplication (%)']]],
+  ['Languages and frameworks', [['languages', 'Languages'], ['framework_backend', 'Back-end frameworks'], ['framework_frontend', 'Front-end frameworks'], ['databases_used', 'Databases'], ['third_party_apis', 'Third-party APIs']]],
+  ['Quality signals from the tool', [['repo_rating_score', 'Tool rating (0–10)'], ['repo_rating_label', 'Tool rating label'], ['code_complexity', 'Code complexity'], ['documentation_quality', 'Documentation'],
+    ['setup_guidelines', 'Setup guide'], ['security_findings', 'Secrets scan'], ['ai_detection_percent', 'AI-detection (%)']]],
+  ['Pull requests (GitHub)', [['total_pr_count', 'Total'], ['open_pr_count', 'Open'], ['closed_pr_count', 'Closed'], ['merged_pr_count', 'Merged'], ['github_pr_analysis_available', 'Available']]]];
+const MG_NUMERIC = new Set(['commits', 'meaningful_commit_count', 'contributors', 'branch_count', 'loc_code', 'loc_comment', 'loc_blank', 'loc_files', 'tokens_llm', 'total_pr_count', 'open_pr_count', 'closed_pr_count', 'merged_pr_count']);
+function mgDownload(run, name) {
+  const f = (run.mercor && run.mercor.files || {})[name]; if (f == null) return;
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿' + f], {type: 'text/csv'})); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+}
+function mgCommand(r) {
+  const repo = String(r.pr || '').replace(/^API-/, ''), src = r.source === 'api' ? 'api' : 'cli';
+  return `powershell -ExecutionPolicy Bypass -File .\\_dev\\run_mercor.ps1 -PR ${repo} -Source ${src}`;
+}
+function tabMercor(r) {
+  const M = r.mercor;
+  if (!M) return `<h2 style="margin-top:6px">Mercor grader</h2><p class="note">The grader has not been run on this repository yet. It scores the repository this run delivered, with the quality-score agent and the analysis tool, and shows the result here.</p>` +
+    `<p class="small muted">Run it from the folder that holds <span class="mono">_dev</span>:</p><div class="card"><span class="mono small" style="word-break:break-all">${esc(mgCommand(r))}</span></div>`;
+  const steps = M.steps || [], wall = M.wall_s || 1, st = M.status;
+  const stChip = st === 'finished' ? chip('finished', 'green') : st === 'running' ? chip('running', 'run') : chip(st || 'unknown', 'amber');
+  const stepSec = n => (steps.find(s => s.name === n) || {}).seconds;
+  const A = M.agent, T = M.tool, Q = M.quality, S = M.summary || {}, files = M.files || {};
+  const rows = steps.map((s, i) => {
+    const off = M.started && s.started ? Math.max(0, s.started - M.started) : 0, w = s.seconds != null ? s.seconds : (M.started ? (Date.now() / 1000 - (s.started || M.started)) : 0);
+    return `<tr><td><b>${esc(s.label)}</b><br><span class="muted small">${s.kind === 'agent' ? 'AI agent (Codex)' : 'program'}</span></td>` +
+      `<td style="width:46%"><div class="bar" style="height:14px"><i style="margin-left:${(off / wall * 100).toFixed(1)}%;width:${Math.max(1.5, w / wall * 100).toFixed(1)}%;background:${PALETTE[i % PALETTE.length]}"></i></div></td>` +
+      `<td class="num">${s.seconds != null ? dur(s.seconds) : 'running…'}</td><td>${s.status === 'running' ? chip('running', 'run') : s.exit === 0 || s.exit == null ? chip('done', 'green') : chip('exit ' + s.exit, 'red')}</td></tr>`;
+  }).join('');
+  const grp = ([title, keys]) => {
+    const items = keys.filter(([k]) => S[k] !== undefined && S[k] !== '');
+    return items.length ? `<div class="card grow"><h3>${esc(title)}</h3><table><tbody>${items.map(([k, l]) => `<tr><td class="muted small">${esc(l)}</td><td class="num">${MG_NUMERIC.has(k) && !isNaN(+S[k]) ? n0(+S[k]) : esc(S[k])}</td></tr>`).join('')}</tbody></table></div>` : '';
+  };
+  const names = Object.keys(files);
+  return `<h2 style="margin-top:6px">Mercor grader ${stChip}</h2><p class="muted">The quality-score agent and the analysis tool, run on <span class="mono">${esc(M.tree || 'the delivered repository')}</span> — the repository this run delivered, after anonymisation.</p>` +
+    `<div class="tiles">` + tile('time to complete', dur(M.wall_s), st === 'running' ? 'still running' : `${when(M.started)} → ${when(M.ended)}`) +
+    tile('quality-score agent', dur(stepSec('quality_score')), A ? `${esc(A.model || '?')} · ${esc(A.effort || '?')}` : 'not run') +
+    tile('analysis tool', dur(stepSec('analysis_tool')), T && T.seconds != null ? `tool reports ${T.seconds}s of work` : 'not run') +
+    tile('agent tokens', A && A.tokens != null ? tok(A.tokens) : '–', A ? `${n0(A.commands)} commands${A.failed ? ' · ' + A.failed + ' failed' : ''}` : '') + `</div>` +
+    `<h2>Steps</h2><div class="card wrap" style="padding:0"><table><thead><tr><th>Step</th><th>Timeline</th><th class="num">Took</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table></div>` +
+    (A ? `<div class="row" style="margin-top:14px"><div class="card grow"><h3>What the scoring agent did</h3>${hbars((A.by_kind || []).map((k, i) => ({label: k.kind, value: k.count, text: k.count + (k.count > 1 ? ' commands' : ' command'), color: PALETTE[i % PALETTE.length], tip: `${k.count} commands, ${k.seconds}s of command time`})))}` +
+      `<p class="small muted">Commands the agent ran inside the container. Most of its time is the model thinking, not running commands.</p></div>` +
+      `<div class="card grow"><h3>Quality score</h3>${Q && Q.completed ? `<p>${chip('scoring complete', 'green')}</p>` : `<p>${chip('not complete', 'amber')}</p>`}` +
+      `<p class="small">The score is written only to a sealed file${Q && Q.sealed_file ? ` (<span class="mono">${esc(Q.sealed_file)}</span>, ${n0(Q.sealed_size_kb)} KB)` : ''}. The quality-score method keeps scores out of any place a person can read, so this dashboard does not read or show them.</p></div></div>` : '') +
+    (T ? `<h2>Analysis tool stages</h2><div class="card"><div class="crit">${(T.stages || []).map(x => `<span class="n"><b>${esc(x.stage)}</b> ${x.done ? '✓' : x.active ? '…' : '–'}<br><span class="muted small">${esc(x.what)}</span></span>`).join('')}</div></div>` : '') +
+    (Object.keys(S).length ? `<h2>The delivered repository, as the grader measured it</h2><div class="row">${MG_GROUPS.map(grp).join('')}</div>` : '<p class="note">The analysis tool has not produced its tables yet.</p>') +
+    (names.length ? `<h2>Reports</h2><div class="card wrap" style="padding:0"><table><thead><tr><th>File</th><th>What it holds</th><th></th></tr></thead><tbody>${names.map(n => `<tr><td><b>${esc(n)}</b></td><td class="muted small">${n === 'summary_all.csv' ? 'All 40 measurements of the repository, one row' : 'The short executive view: licence, security status, architecture labels'}</td><td class="num"><button data-dl="${esc(n)}">Download</button></td></tr>`).join('')}</tbody></table></div>` +
+      `<p class="small muted">Downloads open in Excel. The tool's deep report and the console logs stay on the machine that ran the grader: they list files of the repository.</p>` : '');
 }
 function tabAgents(r) {
   const rows = r.agents;
@@ -302,7 +358,7 @@ function tabBottlenecks(r) {
 }
 async function viewRun(id, tab) {
   const r = state.run = await api('/api/run/' + id);
-  const body = {overview: tabOverview, agents: tabAgents, llm: tabLLM, system: tabSystem, bottlenecks: tabBottlenecks}[tab] || tabOverview;
+  const body = {overview: tabOverview, mercor: tabMercor, agents: tabAgents, llm: tabLLM, system: tabSystem, bottlenecks: tabBottlenecks}[tab] || tabOverview;
   return head(r) + tabs(id, tab || 'overview') + body(r);
 }
 async function viewCompare(ids) {
