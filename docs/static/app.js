@@ -209,7 +209,7 @@ const TAB_NAME = {overview: 'Summary', agents: 'Agents', llm: 'Model calls', sys
 function tabs(id, cur) { return `<div class="tabs">${Object.keys(TAB_NAME).map(t => `<a href="#/run/${id}/${t}" class="${t === cur ? 'on' : ''}">${TAB_NAME[t]}</a>`).join('')}</div>`; }
 function head(r) {
   return `<p class="small"><a href="#/">← back to overall health</a></p><h1>${esc(r.id)} ${statusChip(r)} ${r.legacy ? chip('imported from an older run') : ''}${r.source ? ' ' + chip(SRC_NAME[r.source] || r.source) : ''}${r.meta.fake_llm ? ' ' + chip('test model') : ''}</h1>` +
-    `<p class="muted">${when(r.started)} · ${dur(r.wall_s)}${r.status === 'running' ? ' so far' : ''} · model ${esc(r.meta.model || '?')} / ${esc(r.meta.effort || '?')}${r.meta.commits ? ' · ' + n0(r.meta.commits) + ' commits' : ''}${r.meta.tier ? ' · ' + r.meta.tier + ' tier' : ''}${r.result ? ' · ' + esc(r.result) : ''}</p>`;
+    `<p class="muted">${when(r.started)} · ${dur(r.wall_s)}${r.status === 'running' ? ' so far' : ''} · model ${esc(r.meta.model || '?')} / ${esc(r.meta.effort || '?')}${(r.repo_stats?.before?.commits ?? r.meta.commits) ? ' · ' + n0(r.repo_stats?.before?.commits ?? r.meta.commits) + ' commits' : ''}${r.meta.tier ? ' · ' + r.meta.tier + ' tier' : ''}${r.result ? ' · ' + esc(r.result) : ''}</p>`;
 }
 function repoPanel(r) {
   const S = r.repo_stats, B = S && S.before, A = S && S.after;
