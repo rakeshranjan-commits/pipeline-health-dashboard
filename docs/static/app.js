@@ -232,10 +232,24 @@ function repoPanel(r) {
     `</tbody></table></div><p class="small muted">Counts only: no names or file contents. “After” is the repository this run delivered, with its anonymised pull requests and issues. ` +
     `Small differences are expected, because the anonymisation rewrites names, authors and some text.${G ? ' The grader column is what the Mercor analysis tool counted on the delivered repository (lines are code lines only, so they are lower than the text lines above).' : ''}${A ? '' : ' This run has no “after” figures: the delivered repository is overwritten by the next run of the same repository, so only the latest run of each repository keeps them.'}</p>`;
 }
+function recognitionPanel(r) {
+  const J = r.meta && r.meta.traceability; if (!J) return '';
+  const V = {recognised: ['A stranger could name the source project', 'red'], partly: ['Partly recognised', 'amber'],
+    not_recognised: ['Not recognised', 'green'], unusable: ['No usable answer', 'amber']}[J.verdict] || [J.verdict, 'amber'];
+  const say = {recognised: 'A model that saw only the delivered repository named the project it comes from. The evidence it relied on is counted below; the next run replaces the phrases it can.',
+    partly: 'A model that saw only the delivered repository named the project with low confidence, or only as one of several guesses.',
+    not_recognised: 'A model that saw only the delivered repository could not name the project it comes from.',
+    unusable: 'The judge did not return an answer that could be used. This does not affect the result of the run.'}[J.verdict] || '';
+  const kinds = Object.entries(J.evidence_by_kind || {}).map(([k, n]) => chip(`${k} · ${n}`)).join(' ');
+  return `<div class="card" style="margin-top:14px"><h3>Blind recognition <span class="muted small">(a model judging the delivered repository)</span></h3>` +
+    `<p>${chip(V[0], V[1])}${J.confidence != null ? ` <span class="muted">confidence ${Math.round(J.confidence * 100)}%</span>` : ''}</p><p class="small">${say}</p>` +
+    (J.evidence_total ? `<p class="small"><b>${n0(J.evidence_total)}</b> piece(s) of evidence: ${kinds}${J.fixable_phrases ? ` · <b>${n0(J.fixable_phrases)}</b> phrase(s) can be replaced automatically` : ''}</p>` : '') +
+    `<p class="small muted">Advisory only: it never fails a run. What the model guessed, and the exact text it relied on, name the real project and are kept private.</p></div>`;
+}
 function tabOverview(r) {
   const s = r.score, k = r.kpis, comp = (n, v, why) => `<div class="comp"><span>${n}</span><div class="bar"><i style="width:${v ?? 0}%;background:${COL[lightOf(v)]}"></i></div><b>${v ?? '–'}</b></div>${why && why.length ? `<div class="small muted" style="margin:-2px 0 6px 98px">${esc(why.join(' · '))}</div>` : ''}`;
   const cp = r.critical_path;
-  return repoPanel(r) + `<div class="row" style="margin-top:14px"><div class="card grow"><h3>Health</h3><div class="score">${ring(s.overall, s.light)}<div style="flex:1">${comp('Outcome', s.outcome)}${comp('Agents', s.agents)}${comp('LLM', s.llm, s.llm_why)}${comp('System', s.system, s.system_why)}</div></div></div>` +
+  return repoPanel(r) + recognitionPanel(r) + `<div class="row" style="margin-top:14px"><div class="card grow"><h3>Health</h3><div class="score">${ring(s.overall, s.light)}<div style="flex:1">${comp('Outcome', s.outcome)}${comp('Agents', s.agents)}${comp('LLM', s.llm, s.llm_why)}${comp('System', s.system, s.system_why)}</div></div></div>` +
     `<div class="card grow"><h3>What to look at first</h3>${r.bottlenecks.slice(0, 3).map(insight).join('') || '<p class="muted">No findings.</p>'}<p class="small"><a href="#/run/${r.id}/bottlenecks">all findings →</a></p></div></div>` +
     `<h2>At a glance</h2><div class="tiles">` +
     tile('total time', dur(k.wall_s), r.status === 'running' ? 'still running' : '') +
