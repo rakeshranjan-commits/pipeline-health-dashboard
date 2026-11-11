@@ -211,10 +211,29 @@ function head(r) {
   return `<p class="small"><a href="#/">← back to overall health</a></p><h1>${esc(r.id)} ${statusChip(r)} ${r.legacy ? chip('imported from an older run') : ''}${r.source ? ' ' + chip(SRC_NAME[r.source] || r.source) : ''}${r.meta.fake_llm ? ' ' + chip('test model') : ''}</h1>` +
     `<p class="muted">${when(r.started)} · ${dur(r.wall_s)}${r.status === 'running' ? ' so far' : ''} · model ${esc(r.meta.model || '?')} / ${esc(r.meta.effort || '?')}${r.meta.commits ? ' · ' + n0(r.meta.commits) + ' commits' : ''}${r.meta.tier ? ' · ' + r.meta.tier + ' tier' : ''}${r.result ? ' · ' + esc(r.result) : ''}</p>`;
 }
+function repoPanel(r) {
+  const S = r.repo_stats, B = S && S.before, A = S && S.after;
+  const title = '<h2 style="margin-top:6px">Repository before and after</h2>';
+  if (!B) return title + '<p class="note">Repository counts were not recorded for this run.</p>';
+  const rows = [['commits', 'Commits', 'whole history, all branches'], ['loc', 'Lines of code', 'text lines in the files of the latest commit'],
+    ['contributors', 'Contributors', 'different authors in the history'], ['prs', 'Pull requests', 'merged pull requests'], ['issues', 'Issues', 'issues']];
+  const num = v => v == null ? '–' : n0(v);
+  const diff = (b, a) => {
+    if (b == null || a == null) return '<span class="muted">–</span>';
+    const d = a - b; if (!d) return '<span class="muted">no change</span>';
+    return (d > 0 ? '+' : '−') + n0(Math.abs(d)) + (b ? ` <span class="muted small">(${d > 0 ? '+' : '−'}${Math.abs(d / b * 100).toFixed(1)}%)</span>` : '');
+  };
+  return title + `<div class="card wrap" style="padding:0"><table><thead><tr><th></th><th class="num">Original repository <span class="muted small">(before)</span></th>` +
+    `<th class="num">Anonymised repository <span class="muted small">(after)</span></th><th class="num">Difference</th></tr></thead><tbody>` +
+    rows.map(([k, label, hint]) => `<tr><td><b>${label}</b><br><span class="muted small">${hint}</span></td><td class="num">${num(B[k])}</td>` +
+      `<td class="num">${A ? num(A[k]) : '<span class="muted">not recorded</span>'}</td><td class="num">${A ? diff(B[k], A[k]) : '<span class="muted">–</span>'}</td></tr>`).join('') +
+    `</tbody></table></div><p class="small muted">Counts only: no names or file contents. “After” is the repository this run delivered, with its anonymised pull requests and issues. ` +
+    `Small differences are expected, because the anonymisation rewrites names, authors and some text.${A ? '' : ' This run has no “after” figures: the delivered repository is overwritten by the next run of the same repository, so only the latest run of each repository keeps them.'}</p>`;
+}
 function tabOverview(r) {
   const s = r.score, k = r.kpis, comp = (n, v, why) => `<div class="comp"><span>${n}</span><div class="bar"><i style="width:${v ?? 0}%;background:${COL[lightOf(v)]}"></i></div><b>${v ?? '–'}</b></div>${why && why.length ? `<div class="small muted" style="margin:-2px 0 6px 98px">${esc(why.join(' · '))}</div>` : ''}`;
   const cp = r.critical_path;
-  return `<div class="row"><div class="card grow"><h3>Health</h3><div class="score">${ring(s.overall, s.light)}<div style="flex:1">${comp('Outcome', s.outcome)}${comp('Agents', s.agents)}${comp('LLM', s.llm, s.llm_why)}${comp('System', s.system, s.system_why)}</div></div></div>` +
+  return repoPanel(r) + `<div class="row" style="margin-top:14px"><div class="card grow"><h3>Health</h3><div class="score">${ring(s.overall, s.light)}<div style="flex:1">${comp('Outcome', s.outcome)}${comp('Agents', s.agents)}${comp('LLM', s.llm, s.llm_why)}${comp('System', s.system, s.system_why)}</div></div></div>` +
     `<div class="card grow"><h3>What to look at first</h3>${r.bottlenecks.slice(0, 3).map(insight).join('') || '<p class="muted">No findings.</p>'}<p class="small"><a href="#/run/${r.id}/bottlenecks">all findings →</a></p></div></div>` +
     `<h2>At a glance</h2><div class="tiles">` +
     tile('total time', dur(k.wall_s), r.status === 'running' ? 'still running' : '') +
