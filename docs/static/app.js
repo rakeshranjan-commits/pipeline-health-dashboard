@@ -280,13 +280,13 @@ function tabMercor(r) {
   const A = M.agent, T = M.tool, Q = M.quality, S = M.summary || {}, files = M.files || {};
   const rows = steps.map((s, i) => {
     const off = M.started && s.started ? Math.max(0, s.started - M.started) : 0, w = s.seconds != null ? s.seconds : (M.started ? (Date.now() / 1000 - (s.started || M.started)) : 0);
-    return `<tr><td><b>${esc(s.label)}</b><br><span class="muted small">${s.kind === 'agent' ? 'AI agent (Codex)' : 'program'}</span></td>` +
+    return `<tr><td><b>${esc(s.label)}</b><br><span class="muted small">${s.kind === 'agent' ? 'AI agent (Codex)' : s.kind === 'setup' ? 'setup' : 'program'}</span></td>` +
       `<td style="width:46%"><div class="bar" style="height:14px"><i style="margin-left:${(off / wall * 100).toFixed(1)}%;width:${Math.max(1.5, w / wall * 100).toFixed(1)}%;background:${PALETTE[i % PALETTE.length]}"></i></div></td>` +
       `<td class="num">${s.seconds != null ? dur(s.seconds) : 'running…'}</td><td>${s.status === 'running' ? chip('running', 'run') : s.exit === 0 || s.exit == null ? chip('done', 'green') : chip('exit ' + s.exit, 'red')}</td></tr>`;
   }).join('');
   const grp = ([title, keys]) => {
     const items = keys.filter(([k]) => S[k] !== undefined && S[k] !== '');
-    return items.length ? `<div class="card grow"><h3>${esc(title)}</h3><table><tbody>${items.map(([k, l]) => `<tr><td class="muted small">${esc(l)}</td><td class="num">${MG_NUMERIC.has(k) && !isNaN(+S[k]) ? n0(+S[k]) : esc(S[k])}</td></tr>`).join('')}</tbody></table></div>` : '';
+    return items.length ? `<div class="card"><h3>${esc(title)}</h3><table style="table-layout:auto;width:100%"><tbody>${items.map(([k, l]) => `<tr><td class="muted small">${esc(l)}</td><td class="num" style="white-space:normal;overflow-wrap:anywhere;text-align:right">${MG_NUMERIC.has(k) && !isNaN(+S[k]) ? n0(+S[k]) : esc(S[k])}</td></tr>`).join('')}</tbody></table></div>` : '';
   };
   const names = Object.keys(files);
   return `<h2 style="margin-top:6px">Mercor grader ${stChip}</h2><p class="muted">The quality-score agent and the analysis tool, run on <span class="mono">${esc(M.tree || 'the delivered repository')}</span> — the repository this run delivered, after anonymisation.</p>` +
@@ -300,7 +300,7 @@ function tabMercor(r) {
       `<div class="card grow"><h3>Quality score</h3>${Q && Q.completed ? `<p>${chip('scoring complete', 'green')}</p>` : `<p>${chip('not complete', 'amber')}</p>`}` +
       `<p class="small">The score is written only to a sealed file${Q && Q.sealed_file ? ` (<span class="mono">${esc(Q.sealed_file)}</span>, ${n0(Q.sealed_size_kb)} KB)` : ''}. The quality-score method keeps scores out of any place a person can read, so this dashboard does not read or show them.</p></div></div>` : '') +
     (T ? `<h2>Analysis tool stages</h2><div class="card"><div class="crit">${(T.stages || []).map(x => `<span class="n"><b>${esc(x.stage)}</b> ${x.done ? '✓' : x.active ? '…' : '–'}<br><span class="muted small">${esc(x.what)}</span></span>`).join('')}</div></div>` : '') +
-    (Object.keys(S).length ? `<h2>The delivered repository, as the grader measured it</h2><div class="row">${MG_GROUPS.map(grp).join('')}</div>` : '<p class="note">The analysis tool has not produced its tables yet.</p>') +
+    (Object.keys(S).length ? `<h2>The delivered repository, as the grader measured it</h2><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px">${MG_GROUPS.map(grp).join('')}</div>` : '<p class="note">The analysis tool has not produced its tables yet.</p>') +
     (names.length ? `<h2>Reports</h2><div class="card wrap" style="padding:0"><table><thead><tr><th>File</th><th>What it holds</th><th></th></tr></thead><tbody>${names.map(n => `<tr><td><b>${esc(n)}</b></td><td class="muted small">${n === 'summary_all.csv' ? 'All 40 measurements of the repository, one row' : 'The short executive view: licence, security status, architecture labels'}</td><td class="num"><button data-dl="${esc(n)}">Download</button></td></tr>`).join('')}</tbody></table></div>` +
       `<p class="small muted">Downloads open in Excel. The tool's deep report and the console logs stay on the machine that ran the grader: they list files of the repository.</p>` : '');
 }
